@@ -1,4 +1,4 @@
-from data import COCODetection, MEANS, COLORS, COCO_CLASSES
+from data import COCODetection, get_label_map, MEANS, COLORS
 from yolact import Yolact
 from utils.augmentations import BaseTransform, FastBaseTransform, Resize
 from utils.functions import MovingAverage, ProgressBar
@@ -46,8 +46,6 @@ def parse_args(argv=None):
                         help='Further restrict the number of predictions to parse')
     parser.add_argument('--cuda', default=True, type=str2bool,
                         help='Use cuda to evaulate model')
-    parser.add_argument('--cross_class_nms', default=True, type=str2bool,
-                        help='Whether to use cross-class nms (faster) or do nms per class')
     parser.add_argument('--fast_nms', default=True, type=str2bool,
                         help='Whether to use a faster, but not entirely correct version of NMS.')
     parser.add_argument('--display_masks', default=True, type=str2bool,
@@ -99,7 +97,7 @@ def parse_args(argv=None):
     parser.add_argument('--images', default=None, type=str,
                         help='An input folder of images and output folder to save detected images. Should be in the format input->output.')
     parser.add_argument('--video', default=None, type=str,
-                        help='A path to a video to evaluate on.')
+                        help='A path to a video to evaluate on. Passing in a number will use that index webcam.')
     parser.add_argument('--video_multiframe', default=1, type=int,
                         help='The number of frames to evaluate in parallel to make videos play at higher fps.')
     parser.add_argument('--score_threshold', default=0, type=float,
@@ -122,7 +120,7 @@ def parse_args(argv=None):
         random.seed(args.seed)
 
 iou_thresholds = [x / 100 for x in range(50, 100, 5)]
-coco_cats = [] # Call prep_coco_cats to fill this
+coco_cats = {} # Call prep_coco_cats to fill this
 coco_cats_inv = {}
 
 def prep_display(dets_out, img, gt, gt_masks, h, w, undo_transform=True, class_color=False):
@@ -185,7 +183,7 @@ def prep_display(dets_out, img, gt, gt_masks, h, w, undo_transform=True, class_c
                     cv2.rectangle(img_numpy, (x1, y1), (x2, y2), color, 1)
 
                 if args.display_text:
-                    _class = COCO_CLASSES[classes[j]]
+                    _class = cfg.dataset.class_names[classes[j]]
                     text_str = '%s: %.2f' % (_class, score) if args.display_scores else _class
 
                     font_face = cv2.FONT_HERSHEY_DUPLEX
@@ -213,25 +211,20 @@ def prep_benchmark(dets_out, h, w):
         # Just in case
         torch.cuda.synchronize()
 
-def prep_coco_cats(cats):
+def prep_coco_cats():
     """ Prepare inverted table for category id lookup given a coco cats object. """
-    name_lookup = {}
-
-    for _id, cat_obj in cats.items():
-        name_lookup[cat_obj['name']] = _id
-
-    # Bit of a roundabout way to do this but whatever
-    for i in range(len(COCO_CLASSES)):
-        coco_cats.append(name_lookup[COCO_CLASSES[i]])
-        coco_cats_inv[coco_cats[-1]] = i
+    for coco_cat_id, transformed_cat_id_p1 in get_label_map().items():
+        transformed_cat_id = transformed_cat_id_p1 - 1
+        coco_cats[transformed_cat_id] = coco_cat_id
+        coco_cats_inv[coco_cat_id] = transformed_cat_id
 
 
 def get_coco_cat(transformed_cat_id):
-    """ transformed_cat_id is [0,80) as indices in COCO_CLASSES """
+    """ transformed_cat_id is [0,80) as indices in cfg.dataset.class_names """
     return coco_cats[transformed_cat_id]
 
 def get_transformed_cat(coco_cat_id):
-    """ transformed_cat_id is [0,80) as indices in COCO_CLASSES """
+    """ transformed_cat_id is [0,80) as indices in cfg.dataset.class_names """
     return coco_cats_inv[coco_cat_id]
 
 
@@ -301,7 +294,7 @@ class Detections:
             image_obj['dets'].append({
                 'score': bbox['score'],
                 'bbox': bbox['bbox'],
-                'category': COCO_CLASSES[get_transformed_cat(bbox['category_id'])],
+                'category': cfg.dataset.class_names[get_transformed_cat(bbox['category_id'])],
                 'mask': mask['segmentation'],
             })
 
@@ -567,8 +560,18 @@ def evalimages(net:Yolact, input_folder:str, output_folder:str):
 from multiprocessing.pool import ThreadPool
 
 def evalvideo(net:Yolact, path:str):
-    vid = cv2.VideoCapture(path)
-    transform = FastBaseTransform()
+    # If the path is a digit, parse it as a webcam index
+    if path.isdigit():
+        vid = cv2.VideoCapture(int(path))
+    else:
+        vid = cv2.VideoCapture(path)
+    
+    if not vid.isOpened():
+        print('Could not open video "%s"' % path)
+        exit(-1)
+    
+    net = torch.nn.DataParallel(net)
+    transform = torch.nn.DataParallel(FastBaseTransform())
     frame_times = MovingAverage()
     fps = 0
     frame_time_target = 1 / vid.get(cv2.CAP_PROP_FPS)
@@ -701,7 +704,6 @@ def savevideo(net:Yolact, in_path:str, out_path:str):
 
 
 def evaluate(net:Yolact, dataset, train_mode=False):
-    net.detect.cross_class_nms = args.cross_class_nms
     net.detect.use_fast_nms = args.fast_nms
     cfg.mask_proto_debug = args.mask_proto_debug
 
@@ -734,8 +736,8 @@ def evaluate(net:Yolact, dataset, train_mode=False):
         # For each class and iou, stores tuples (score, isPositive)
         # Index ap_data[type][iouIdx][classIdx]
         ap_data = {
-            'box' : [[APDataObject() for _ in COCO_CLASSES] for _ in iou_thresholds],
-            'mask': [[APDataObject() for _ in COCO_CLASSES] for _ in iou_thresholds]
+            'box' : [[APDataObject() for _ in cfg.dataset.class_names] for _ in iou_thresholds],
+            'mask': [[APDataObject() for _ in cfg.dataset.class_names] for _ in iou_thresholds]
         }
         detections = Detections()
     else:
@@ -840,7 +842,7 @@ def calc_map(ap_data):
     print('Calculating mAP...')
     aps = [{'box': [], 'mask': []} for _ in iou_thresholds]
 
-    for _class in range(len(COCO_CLASSES)):
+    for _class in range(len(cfg.dataset.class_names)):
         for iou_idx in range(len(iou_thresholds)):
             for iou_type in ('box', 'mask'):
                 ap_obj = ap_data[iou_type][iou_idx][_class]
@@ -918,8 +920,9 @@ if __name__ == '__main__':
             exit()
 
         if args.image is None and args.video is None and args.images is None:
-            dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info, transform=BaseTransform())
-            prep_coco_cats(dataset.coco.cats)
+            dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
+                                    transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
+            prep_coco_cats()
         else:
             dataset = None        
 

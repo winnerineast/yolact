@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from ..box_utils import decode, nms, jaccard, index2d
+from ..box_utils import decode, jaccard, index2d
 from utils import timer
 
 from data import cfg, mask_type
@@ -218,4 +218,5 @@ class Detect(object):
         idx = idx[idx2]
         classes = classes[idx2]
 
-        return boxes[idx], masks[idx], classes, scores
+        # Undo the multiplication above
+        return boxes[idx] / cfg.mask_size, masks[idx], classes, scores
