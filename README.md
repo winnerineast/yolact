@@ -92,15 +92,13 @@ python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_thresho
 ```
 ## Video
 ```Shell
-# Display a video in real-time
-# I have to work out the kinks for this one. Drawing the frame takes more time than executing the network resulting in sub-30 fps :/
-python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_threshold=0.3 --top_k=100 --video=my_video.mp4
+# Display a video in real-time. "--video_multiframe" will process that many frames at once for improved performance.
+python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_threshold=0.3 --top_k=100 --video_multiframe=2 --video=my_video.mp4
 
-# Display a webcam feed in real-time (same disclaimer as above)
-# If you have multiple webcams pass the index of the webcam you want instead of 0.
-python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_threshold=0.3 --top_k=100 --video=0
+# Display a webcam feed in real-time. If you have multiple webcams pass the index of the webcam you want instead of 0.
+python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_threshold=0.3 --top_k=100 --video_multiframe=2 --video=0
 
-# Process a video and save it to another file.
+# Process a video and save it to another file. This is unoptimized.
 python eval.py --trained_model=weights/yolact_base_54_800000.pth --score_threshold=0.3 --top_k=100 --video=input_video.mp4:output_video.mp4
 ```
 As you can tell, `eval.py` can do a ton of stuff. Run the `--help` command to see everything it can do.
@@ -158,6 +156,9 @@ my_custom_dataset = dataset_base.copy({
    - Class IDs in the annotation file should start at 1 and increase sequentially on the order of `class_names`. If this isn't the case for your annotation file (like in COCO), see the field `label_map` in `dataset_base`.
    - If you do not want to create a validation split, use the same image path and annotations file for validation. By default (see `python train.py --help`), `train.py` will output validation mAP for the first 5000 images in the dataset every 2 epochs.
  - Finally, in `yolact_base_config` in the same file, change the value for `'dataset'` to `'my_custom_dataset'` or whatever you named the config object above. Then you can use any of the training commands in the previous section.
+
+#### Creating a Custom Dataset from Scratch
+See [this nice post by @Amit12690](https://github.com/dbolya/yolact/issues/70#issuecomment-504283008) for tips on how to annotate a custom dataset and prepare it for use with YOLACT.
 
 
 

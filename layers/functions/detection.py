@@ -133,7 +133,7 @@ class Detect(object):
         
         return idx_out, idx_out.size(0)
 
-    def fast_nms(self, boxes, masks, scores, iou_threshold=0.5, top_k=200, second_threshold=False):
+    def fast_nms(self, boxes, masks, scores, iou_threshold:float=0.5, top_k:int=200, second_threshold:bool=False):
         scores, idx = scores.sort(1, descending=True)
 
         idx = idx[:, :top_k].contiguous()
@@ -186,7 +186,7 @@ class Detect(object):
         scr_lst = []
 
         # Multiplying by max_size is necessary because of how cnms computes its area and intersections
-        boxes = boxes * cfg.mask_size
+        boxes = boxes * cfg.max_size
 
         for _cls in range(num_classes):
             cls_scores = scores[_cls, :]
@@ -219,4 +219,4 @@ class Detect(object):
         classes = classes[idx2]
 
         # Undo the multiplication above
-        return boxes[idx] / cfg.mask_size, masks[idx], classes, scores
+        return boxes[idx] / cfg.max_size, masks[idx], classes, scores
