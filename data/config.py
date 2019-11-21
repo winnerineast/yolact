@@ -155,6 +155,23 @@ coco2017_testdev_dataset = dataset_base.copy({
     'label_map': COCO_LABEL_MAP
 })
 
+PASCAL_CLASSES = ("aeroplane", "bicycle", "bird", "boat", "bottle",
+                  "bus", "car", "cat", "chair", "cow", "diningtable",
+                  "dog", "horse", "motorbike", "person", "pottedplant",
+                  "sheep", "sofa", "train", "tvmonitor")
+
+pascal_sbd_dataset = dataset_base.copy({
+    'name': 'Pascal SBD 2012',
+
+    'train_images': './data/sbd/img',
+    'valid_images': './data/sbd/img',
+    
+    'train_info': './data/sbd/pascal_sbd_train.json',
+    'valid_info': './data/sbd/pascal_sbd_val.json',
+
+    'class_names': PASCAL_CLASSES,
+})
+
 
 
 
@@ -332,6 +349,8 @@ mask_type = Config({
     #   - mask_proto_normalize_emulate_roi_pooling (bool): Normalize the mask loss to emulate roi pooling's affect on loss.
     #   - mask_proto_double_loss (bool): Whether to use the old loss in addition to any special new losses.
     #   - mask_proto_double_loss_alpha (float): The alpha to weight the above loss.
+    #   - mask_proto_split_prototypes_by_head (bool): If true, this will give each prediction head its own prototypes.
+    #   - mask_proto_crop_with_pred_box (bool): Whether to crop with the predicted box or the gt box.
     'lincomb': 1,
 })
 
@@ -371,6 +390,12 @@ fpn_base = Config({
     # Whether to pad the pred layers with 1 on each side (I forgot to add this at the start)
     # This is just here for backwards compatibility
     'pad': True,
+
+    # Whether to add relu to the downsampled layers.
+    'relu_downsample_layers': False,
+
+    # Whether to add relu to the regular layers
+    'relu_pred_layers': True,
 })
 
 
@@ -411,6 +436,13 @@ coco_base_config = Config({
     # Eval.py sets this if you just want to run YOLACT as a detector
     'eval_mask_branch': True,
 
+    # Top_k examples to consider for NMS
+    'nms_top_k': 200,
+    # Examples with confidence less than this are not considered by NMS
+    'nms_conf_thresh': 0.05,
+    # Boxes with IoU overlap greater than this threshold will be culled during NMS
+    'nms_thresh': 0.5,
+
     # See mask_type for details.
     'mask_type': mask_type.direct,
     'mask_size': 16,
@@ -439,6 +471,8 @@ coco_base_config = Config({
     'mask_proto_normalize_emulate_roi_pooling': False,
     'mask_proto_double_loss': False,
     'mask_proto_double_loss_alpha': 1,
+    'mask_proto_split_prototypes_by_head': False,
+    'mask_proto_crop_with_pred_box': False,
 
     # SSD data augmentation parameters
     # Randomize hue, vibrance, etc.
@@ -449,6 +483,10 @@ coco_base_config = Config({
     'augment_random_sample_crop': True,
     # Mirror the image with a probability of 1/2
     'augment_random_mirror': True,
+    # Flip the image vertically with a probability of 1/2
+    'augment_random_flip': False,
+    # With uniform probability, rotate the image [0,90,180,270] degrees
+    'augment_random_rot90': False,
 
     # If using batchnorm anywhere in the backbone, freeze the batchnorm layer during training.
     # Note: any additional batch norm layers after the backbone will not be frozen.
@@ -472,6 +510,9 @@ coco_base_config = Config({
     # The initial bias toward forground objects, as specified in the focal loss paper
     'focal_loss_init_pi': 0.01,
 
+    # Keeps track of the average number of examples for each class, and weights the loss for that class accordingly.
+    'use_class_balanced_conf': False,
+
     # Whether to use sigmoid focal loss instead of softmax, all else being the same.
     'use_sigmoid_focal_loss': False,
 
@@ -488,6 +529,10 @@ coco_base_config = Config({
     # This branch is only evaluated during training time and is just there for multitask learning.
     'use_semantic_segmentation_loss': False,
     'semantic_segmentation_alpha': 1,
+
+    # Adds another branch to the netwok to predict Mask IoU.
+    'use_mask_scoring': False,
+    'mask_scoring_alpha': 1,
 
     # Match gt boxes using the Box2Pix change metric instead of the standard IoU metric.
     # Note that the threshold you set for iou_threshold should be negative with this setting on.
@@ -511,6 +556,9 @@ coco_base_config = Config({
     'positive_iou_threshold': 0.5,
     'negative_iou_threshold': 0.5,
 
+    # When using ohem, the ratio between positives and negatives (3 means 3 negatives to 1 positive)
+    'ohem_negpos_ratio': 3,
+
     # If less than 1, anchors treated as a negative that have a crowd iou over this threshold with
     # the crowd boxes will be treated as a neutral.
     'crowd_iou_threshold': 1,
@@ -518,8 +566,7 @@ coco_base_config = Config({
     # This is filled in at runtime by Yolact's __init__, so don't touch it
     'mask_dim': None,
 
-    # Input image size. If preserve_aspect_ratio is False, min_size is ignored.
-    'min_size': 200,
+    # Input image size.
     'max_size': 300,
     
     # Whether or not to do post processing on the cpu at test time
@@ -542,7 +589,7 @@ coco_base_config = Config({
     'use_gt_bboxes': False,
 
     # Whether or not to preserve aspect ratio when resizing the image.
-    # If True, uses the faster r-cnn resizing scheme.
+    # If True, this will resize all images to be max_size^2 pixels in area while keeping aspect ratio.
     # If False, all images are resized to max_size x max_size
     'preserve_aspect_ratio': False,
 
@@ -673,7 +720,21 @@ yolact_resnet50_config = yolact_base_config.copy({
 })
 
 
+yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
+    'name': None, # Will default to yolact_resnet50_pascal
+    
+    # Dataset stuff
+    'dataset': pascal_sbd_dataset,
+    'num_classes': len(pascal_sbd_dataset.class_names) + 1,
 
+    'max_iter': 120000,
+    'lr_steps': (60000, 100000),
+    
+    'backbone': yolact_resnet50_config.backbone.copy({
+        'pred_scales': [[32], [64], [128], [256], [512]],
+        'use_square_anchors': False,
+    })
+})
 
 
 # Default config
@@ -686,6 +747,9 @@ def set_cfg(config_name:str):
     # Note this is not just an eval because I'm lazy, but also because it can
     # be used like ssd300_config.copy({'max_size': 400}) for extreme fine-tuning
     cfg.replace(eval(config_name))
+
+    if cfg.name is None:
+        cfg.name = config_name.split('_config')[0]
 
 def set_dataset(dataset_name:str):
     """ Sets the dataset of the current config. """
